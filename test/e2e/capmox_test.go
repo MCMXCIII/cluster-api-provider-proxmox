@@ -13,7 +13,8 @@ You may obtain a copy of the License at
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and limitations under the License.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 
 package e2e
@@ -44,6 +45,7 @@ var _ = Describe("Workload cluster creation", func() {
 	)
 
 	BeforeEach(func() {
+		// Validate environment setup and create necessary directories
 		Expect(e2eConfig).ToNot(BeNil(), "Invalid argument. e2eConfig can't be nil when calling %s spec", specName)
 		Expect(clusterctlConfigPath).To(BeAnExistingFile(), "Invalid argument. clusterctlConfigPath must be an existing file when calling %s spec", specName)
 		Expect(bootstrapClusterProxy).ToNot(BeNil(), "Invalid argument. bootstrapClusterProxy can't be nil when calling %s spec", specName)
@@ -77,49 +79,65 @@ var _ = Describe("Workload cluster creation", func() {
 		dumpSpecResourcesAndCleanup(ctx, cleanInput)
 	})
 
-	Context("[RBAC] Validate Proxmox RBAC Permissions", func() {
-		It("Should validate that Proxmox RBAC roles and permissions are correctly applied", func() {
-			// Define a list of roles and their expected paths/permissions
-			rbacTests := []struct {
-				role        string
-				path        string
-				expected    string
-				propagate   bool
-			}{
-				{"Sys.Audit", "/nodes", "read", false},
-				{"PVEVMAdmin", "/pool/capi", "write", false},
-				{"PVETemplateUser", "/pool/templates", "read", false},
-				{"PVESDNUser", "/sdn/zones/localnetwork/vmbr0/1234", "read", false},
-				{"PVEDataStoreAdmin", "/storage/capi_files", "write", false},
-				{"Datastore.AllocateSpace", "/storage/shared_block", "write", false},
-			}
+	// Helper function to apply cluster templates
+	applyClusterTemplate := func(clusterName, flavor string, controlPlaneCount, workerCount int64) *clusterctl.ApplyClusterTemplateAndWaitResult {
+		return clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
+			ClusterProxy: bootstrapClusterProxy,
+			ConfigCluster: clusterctl.ConfigClusterInput{
+				LogFolder:                clusterctlLogFolder,
+				ClusterctlConfigPath:     clusterctlConfigPath,
+				KubeconfigPath:           bootstrapClusterProxy.GetKubeconfigPath(),
+				InfrastructureProvider:   clusterctl.DefaultInfrastructureProvider,
+				Flavor:                   flavor,
+				Namespace:                namespace.Name,
+				ClusterName:              clusterName,
+				KubernetesVersion:        e2eConfig.GetVariable(KubernetesVersion),
+				ControlPlaneMachineCount: pointer.Int64Ptr(controlPlaneCount),
+				WorkerMachineCount:       pointer.Int64Ptr(workerCount),
+			},
+			WaitForClusterIntervals:      e2eConfig.GetIntervals(specName, "wait-cluster"),
+			WaitForControlPlaneIntervals: e2eConfig.GetIntervals(specName, "wait-control-plane"),
+			WaitForMachineDeployments:    e2eConfig.GetIntervals(specName, "wait-worker-nodes"),
+		}, result)
+	}
 
-			// Iterate over each role and verify permissions
-			for _, test := range rbacTests {
-				By(fmt.Sprintf("Verifying RBAC permission for role: %s, path: %s", test.role, test.path))
-				verifyRBACPermission(test.role, test.path, test.expected, test.propagate)
-			}
+	// Tests for a generic workload cluster with a single control-plane node and worker scaling
+	Context("[Generic] Creating a single control-plane cluster", func() {
+		It("Should create a cluster with 1 worker node and can be scaled", func() {
+			By("Initializes with 1 worker node")
+			result := applyClusterTemplate(clusterName, clusterctl.DefaultFlavor, 1, 1)
+
+			By("Scaling worker node to 3")
+			result = applyClusterTemplate(clusterName, clusterctl.DefaultFlavor, 1, 3)
 		})
 	})
-	
-	// Function to verify RBAC permissions for Proxmox
-	func verifyRBACPermission(role, path, expected string, propagate bool) {
-		// Create a Proxmox API client here
-		proxmoxClient := getProxmoxClient()
 
-		// Fetch permissions for the role and path
-		permissions, err := proxmoxClient.GetPermissions(role, path)
-		Expect(err).NotTo(HaveOccurred(), "Failed to fetch permissions for role %s and path %s", role, path)
+	// Tests for a highly available cluster setup with 3 control-plane nodes and 2 worker nodes
+	Context("[Generic] Creating a highly available control-plane cluster", func() {
+		It("Should create a cluster with 3 control-plane and 2 worker nodes", func() {
+			By("Creating a highly available cluster")
+			result := applyClusterTemplate(clusterName, clusterctl.DefaultFlavor, 3, 2)
+		})
+	})
 
-		// Check if the permission matches the expected value
-		for _, permission := range permissions {
-			if permission.Path == path {
-				Expect(permission.Role).To(Equal(role), "Expected role %s, but got %s", role, permission.Role)
-				Expect(permission.Permission).To(Equal(expected), "Expected permission %s, but got %s", expected, permission.Permission)
-				Expect(permission.Propagate).To(Equal(propagate), "Expected propagate %v, but got %v", propagate, permission.Propagate)
-			}
-		}
-	}
+	// Tests for a highly available cluster setup with Flatcar OS
+	Context("[Flatcar] Creating a highly available control-plane cluster with Flatcar", func() {
+		It("Should create a HA cluster with Flatcar", func() {
+			By("Creating a flatcar high available cluster")
+			result := applyClusterTemplate(clusterName, "flatcar", 3, 2)
+		})
+	})
+
+	// Tests for creating a single control-plane cluster with multiple configurations
+	Context("[Advanced] Creating a workload cluster with multiple configurations", func() {
+		It("Should create a workload cluster with different configurations", func() {
+			By("Creating a cluster with control-plane count of 2 and worker count of 3")
+			result := applyClusterTemplate(clusterName, clusterctl.DefaultFlavor, 2, 3)
+
+			By("Creating a cluster with control-plane count of 1 and worker count of 5")
+			result = applyClusterTemplate(clusterName, "flatcar", 1, 5)
+		})
+	})
+
 })
-
 
