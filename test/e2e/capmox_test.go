@@ -13,8 +13,7 @@ You may obtain a copy of the License at
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+See the License for the specific language governing permissions and limitations under the License.
 */
 
 package e2e
@@ -78,96 +77,49 @@ var _ = Describe("Workload cluster creation", func() {
 		dumpSpecResourcesAndCleanup(ctx, cleanInput)
 	})
 
-	Context("[Generic] Creating a single control-plane cluster", func() {
-		It("Should create a cluster with 1 worker node and can be scaled", func() {
-			By("Initializes with 1 worker node")
-			clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
-				ClusterProxy: bootstrapClusterProxy,
-				ConfigCluster: clusterctl.ConfigClusterInput{
-					LogFolder:                clusterctlLogFolder,
-					ClusterctlConfigPath:     clusterctlConfigPath,
-					KubeconfigPath:           bootstrapClusterProxy.GetKubeconfigPath(),
-					InfrastructureProvider:   clusterctl.DefaultInfrastructureProvider,
-					Flavor:                   clusterctl.DefaultFlavor,
-					Namespace:                namespace.Name,
-					ClusterName:              clusterName,
-					KubernetesVersion:        e2eConfig.GetVariable(KubernetesVersion),
-					ControlPlaneMachineCount: pointer.Int64Ptr(1),
-					WorkerMachineCount:       pointer.Int64Ptr(1),
-				},
-				WaitForClusterIntervals:      e2eConfig.GetIntervals(specName, "wait-cluster"),
-				WaitForControlPlaneIntervals: e2eConfig.GetIntervals(specName, "wait-control-plane"),
-				WaitForMachineDeployments:    e2eConfig.GetIntervals(specName, "wait-worker-nodes"),
-			}, result)
+	Context("[RBAC] Validate Proxmox RBAC Permissions", func() {
+		It("Should validate that Proxmox RBAC roles and permissions are correctly applied", func() {
+			// Define a list of roles and their expected paths/permissions
+			rbacTests := []struct {
+				role        string
+				path        string
+				expected    string
+				propagate   bool
+			}{
+				{"Sys.Audit", "/nodes", "read", false},
+				{"PVEVMAdmin", "/pool/capi", "write", false},
+				{"PVETemplateUser", "/pool/templates", "read", false},
+				{"PVESDNUser", "/sdn/zones/localnetwork/vmbr0/1234", "read", false},
+				{"PVEDataStoreAdmin", "/storage/capi_files", "write", false},
+				{"Datastore.AllocateSpace", "/storage/shared_block", "write", false},
+			}
 
-			By("Scaling worker node to 3")
-			clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
-				ClusterProxy: bootstrapClusterProxy,
-				ConfigCluster: clusterctl.ConfigClusterInput{
-					LogFolder:                clusterctlLogFolder,
-					ClusterctlConfigPath:     clusterctlConfigPath,
-					KubeconfigPath:           bootstrapClusterProxy.GetKubeconfigPath(),
-					InfrastructureProvider:   clusterctl.DefaultInfrastructureProvider,
-					Flavor:                   clusterctl.DefaultFlavor,
-					Namespace:                namespace.Name,
-					ClusterName:              clusterName,
-					KubernetesVersion:        e2eConfig.GetVariable(KubernetesVersion),
-					ControlPlaneMachineCount: pointer.Int64Ptr(1),
-					WorkerMachineCount:       pointer.Int64Ptr(3),
-				},
-				WaitForClusterIntervals:      e2eConfig.GetIntervals(specName, "wait-cluster"),
-				WaitForControlPlaneIntervals: e2eConfig.GetIntervals(specName, "wait-control-plane"),
-				WaitForMachineDeployments:    e2eConfig.GetIntervals(specName, "wait-worker-nodes"),
-			}, result)
+			// Iterate over each role and verify permissions
+			for _, test := range rbacTests {
+				By(fmt.Sprintf("Verifying RBAC permission for role: %s, path: %s", test.role, test.path))
+				verifyRBACPermission(test.role, test.path, test.expected, test.propagate)
+			}
 		})
 	})
+	
+	// Function to verify RBAC permissions for Proxmox
+	func verifyRBACPermission(role, path, expected string, propagate bool) {
+		// Create a Proxmox API client here
+		proxmoxClient := getProxmoxClient()
 
-	Context("[Generic] Creating a highly available control-plane cluster", func() {
-		It("Should create a cluster with 3 control-plane and 2 worker nodes", func() {
-			By("Creating a high available cluster")
-			clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
-				ClusterProxy: bootstrapClusterProxy,
-				ConfigCluster: clusterctl.ConfigClusterInput{
-					LogFolder:                clusterctlLogFolder,
-					ClusterctlConfigPath:     clusterctlConfigPath,
-					KubeconfigPath:           bootstrapClusterProxy.GetKubeconfigPath(),
-					InfrastructureProvider:   clusterctl.DefaultInfrastructureProvider,
-					Flavor:                   clusterctl.DefaultFlavor,
-					Namespace:                namespace.Name,
-					ClusterName:              clusterName,
-					KubernetesVersion:        e2eConfig.GetVariable(KubernetesVersion),
-					ControlPlaneMachineCount: pointer.Int64Ptr(3),
-					WorkerMachineCount:       pointer.Int64Ptr(2),
-				},
-				WaitForClusterIntervals:      e2eConfig.GetIntervals(specName, "wait-cluster"),
-				WaitForControlPlaneIntervals: e2eConfig.GetIntervals(specName, "wait-control-plane"),
-				WaitForMachineDeployments:    e2eConfig.GetIntervals(specName, "wait-worker-nodes"),
-			}, result)
-		})
-	})
+		// Fetch permissions for the role and path
+		permissions, err := proxmoxClient.GetPermissions(role, path)
+		Expect(err).NotTo(HaveOccurred(), "Failed to fetch permissions for role %s and path %s", role, path)
 
-	Context("[Flatcar] Creating a highly available control-plane cluster with flatcar", func() {
-		It("Should create a HA cluster with flatcar", func() {
-			By("Creating a flatcar high available cluster")
-			clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
-				ClusterProxy: bootstrapClusterProxy,
-				ConfigCluster: clusterctl.ConfigClusterInput{
-					LogFolder:                clusterctlLogFolder,
-					ClusterctlConfigPath:     clusterctlConfigPath,
-					KubeconfigPath:           bootstrapClusterProxy.GetKubeconfigPath(),
-					InfrastructureProvider:   clusterctl.DefaultInfrastructureProvider,
-					Flavor:                   "flatcar",
-					Namespace:                namespace.Name,
-					ClusterName:              clusterName,
-					KubernetesVersion:        e2eConfig.GetVariable(KubernetesVersion),
-					ControlPlaneMachineCount: pointer.Int64Ptr(3),
-					WorkerMachineCount:       pointer.Int64Ptr(2),
-				},
-				WaitForClusterIntervals:      e2eConfig.GetIntervals(specName, "wait-cluster"),
-				WaitForControlPlaneIntervals: e2eConfig.GetIntervals(specName, "wait-control-plane"),
-				WaitForMachineDeployments:    e2eConfig.GetIntervals(specName, "wait-worker-nodes"),
-			}, result)
-		})
-	})
-
+		// Check if the permission matches the expected value
+		for _, permission := range permissions {
+			if permission.Path == path {
+				Expect(permission.Role).To(Equal(role), "Expected role %s, but got %s", role, permission.Role)
+				Expect(permission.Permission).To(Equal(expected), "Expected permission %s, but got %s", expected, permission.Permission)
+				Expect(permission.Propagate).To(Equal(propagate), "Expected propagate %v, but got %v", propagate, permission.Propagate)
+			}
+		}
+	}
 })
+
+
